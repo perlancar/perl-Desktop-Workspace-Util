@@ -461,11 +461,8 @@ MARKDOWN
 
 =head1 SYNOPSIS
 
+
 =head1 DESCRIPTION
-
-This distribution includes several utilities related to L<DesktopWorkspace>:
-
-#INSERT_EXECS_LIST
 
 
 =head1 SEE ALSO

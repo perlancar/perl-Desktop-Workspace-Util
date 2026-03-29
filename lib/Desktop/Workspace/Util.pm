@@ -6,6 +6,7 @@ use warnings;
 use Log::ger;
 
 use Exporter qw(import);
+use Perinci::Sub::Util qw(gen_modified_sub);
 
 # AUTHORITY
 # DATE
@@ -34,8 +35,8 @@ our %argspecopt_ns_prefixes = (
         'x.name.is_plural' => 1,
         'x.name.singular' => 'ns_prefix',
         summary => 'List of namespaces to search for a Desktop Workspace specification modules',
-        schema => ['array*', of=>'perl::modname'],
-        default => ['DesktopWorkspace'],
+        schema => ['array*', of=>['any*', of=>['perl::modname', ['str', in=>[""]]]]],
+        default => ['DesktopWorkspace', ''],
     },
 );
 
@@ -72,7 +73,7 @@ sub get_desktop_workspace_module {
     push @$ns_prefixes, "" unless @$ns_prefixes;
 
     for my $ns_prefix (@$ns_prefixes) {
-        my $mod = "$ns_prefix\::$module";
+        my $mod = (length($ns_prefix) ? "$ns_prefix\::" : "") . $module;
         (my $mod_pm = "$mod.pm") =~ s!::!/!g;
         if (eval { require $mod_pm; 1 }) {
             return $mod;
@@ -290,8 +291,170 @@ sub list_desktop_workspace_items {
         } @filtered_items;
     }
 
-    [200, "OK", \@filtered_items];
+    [200, "OK", \@filtered_items, {
+        'func.obj' => $obj,
+    }];
 }
+
+gen_modified_sub(
+    die => 1,
+    output_name => 'open_desktop_workspace_items',
+    base_name => 'list_desktop_workspace_items',
+    summary => 'Open desktop workspace items',
+    description => <<'MARKDOWN',
+
+Some notes:
+- if you do not use `new_browser_window`, then URLs will be opened in the
+  previous Firefox window which might be in another KDE activity.
+
+MARKDOWN
+    add_args => {
+        new_browser_window => {
+            summary => 'When having to open one or more browser tabs, open a new browser window',
+            description => <<'MARKDOWN',
+
+Override's desktop workspace specification's `new_browser_window` property.
+
+MARKDOWN
+            schema => 'bool*',
+        },
+        kde_activity => {
+            summary => 'Switch to the specified KDE activity name',
+            description => <<'MARKDOWN',
+
+Override's desktop workspace specification's `kde_activity` property.
+
+MARKDOWN
+            schema => 'str*',
+        },
+    },
+    wrap_code => sub {
+        require IPC::System::Options;
+
+        my $orig = shift;
+        my %args = @_;
+
+        my $obj;
+        my $items;
+      LIST_ITEMS: {
+            my $res = $orig->(%args);
+            unless ($res->[0] == 200) {
+                return [500, "Can't list desktop workspace items: $res->[0] - $res->[1]"];
+            }
+            $items = $res->[2];
+            $obj = $res->[3]{'func.obj'};
+        } # LIST_ITEMS
+
+        my @url_items;
+        my @file_items;
+        my @dir_items;
+        my @prog_items;
+      CATEGORIZE_ITEMS: {
+            for my $item (@$items) {
+                if (defined $item->{url}) {
+                    push @url_items, $item;
+                } elsif (defined $item->{file}) {
+                    push @file_items, $item;
+                } elsif (defined $item->{dir}) {
+                    push @dir_items, $item;
+                } elsif (defined $item->{prog_name} or defined $item->{prog_path}) {
+                    push @prog_items, $item;
+                }
+            }
+        } # CATEGORIZE_ITEMS
+
+      SWITCH_KDE_ACTIVITY: {
+            my $kde_activity = $args{kde_activity} // $obj->{kde_activity};
+            last unless defined $kde_activity;
+            require Desktop::KDEActivity::Util;
+            my $res = Desktop::KDEActivity::Util::set_current_kde_activity(
+                name => $kde_activity);
+            return [500, "Can't set current KDE activity: $res->[0] - $res->[1]"]
+                unless $res->[0] == 200;
+        }
+
+      OPEN_URLS: {
+            last unless @url_items;
+
+            # open URLs as firefox tabs
+            my $new_browser_window = $args{new_browser_window} // $obj->{new_browser_window};
+
+            my $i = 0;
+            for my $item (@url_items) {
+                $i++;
+                my $url = $item->{url};
+
+                my @ff_args;
+                my $env;
+                if (($i == 1 && $new_browser_window) || $item->{new_browser_window}) {
+                    push @ff_args, "--new-window", $url;
+                } else {
+                    push @ff_args, $url;
+                }
+
+                if (defined $item->{firefox_container}) {
+                    $env->{FIREFOX_CONTAINER} = $item->{firefox_container};
+                }
+
+                log_trace "Opening URL in firefox tab [%d/%d]: %s (%s) ...",
+                    $i, scalar(@url_items), $url,
+                    (defined $item->{firefox_container} ? "container=$item->{firefox_container}" : "");
+                IPC::System::Options::system(
+                    {env=>$env, log=>1},
+                    "firefox-container", @ff_args);
+            }
+        } # OPEN_URLS
+
+      OPEN_FILES: {
+            last unless @file_items;
+            require Desktop::Open;
+
+            my $i = 0;
+            for my $item (@file_items) {
+                $i++;
+                my $file = $item->{file};
+                log_trace "Opening file [%d/%d] %s ...",
+                    $i, scalar(@file_items), $file;
+                Desktop::Open::open_desktop($file);
+            }
+        } # OPEN_FILES
+
+      OPEN_DIRS: {
+            # we currently use dolphin to open dirs
+            last unless @dir_items;
+
+            my $i = 0;
+            my @dirs;
+            for my $item (@dir_items) {
+                $i++;
+                my $dir = $item->{dir};
+                push @dirs, $dir;
+            }
+            log_trace "Opening dirs %s ...", \@dirs;
+            IPC::System::Options::system(
+                {log=>1, shell=>1},
+                "dolphin", "--new-window", @dirs, \"&");
+        } # OPEN_DIRS
+
+      OPEN_PROG: {
+            last unless @prog_items;
+
+            my $i = 0;
+            for my $item (@prog_items) {
+                $i++;
+                my $prog = $item->{prog_name} // $item->{prog_path};
+                log_trace "Opening program [%d/%d] %s ...",
+                    $i, scalar(@prog_items), $prog;
+            IPC::System::Options::system(
+                {log=>1, shell=>1},
+                $prog, ($item->{prog_args} ? @{ $item->{prog_args} } : ()),
+                \"&");
+            }
+        } # OPEN_PROGS
+
+        [200];
+    },
+);
 
 1;
 # ABSTRACT:

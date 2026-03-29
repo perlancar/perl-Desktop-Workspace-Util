@@ -337,7 +337,7 @@ MARKDOWN
         my $obj;
         my $items;
       LIST_ITEMS: {
-            my $res = $orig->(%args);
+            my $res = $orig->(%args, detail=>1);
             unless ($res->[0] == 200) {
                 return [500, "Can't list desktop workspace items: $res->[0] - $res->[1]"];
             }

@@ -328,11 +328,27 @@ MARKDOWN
             schema => 'str*',
         },
     },
+    modify_meta => sub {
+        my $meta = shift;
+
+        $meta->{features} = {
+            dry_run => 1,
+        };
+        $meta->{deps} = {
+            all => [
+                {prog => 'dolphin'},
+                {prog => 'firefox-container'},
+            ],
+        };
+
+    },
     wrap_code => sub {
         require IPC::System::Options;
 
         my $orig = shift;
         my %args = @_;
+
+        my $dry_run = $args{-dry_run};
 
         my $obj;
         my $items;
@@ -396,12 +412,15 @@ MARKDOWN
                     $env->{FIREFOX_CONTAINER} = $item->{firefox_container};
                 }
 
-                log_trace "Opening URL in firefox tab [%d/%d]: %s (%s) ...",
+                log_trace "%sOpening URL in firefox tab [%d/%d]: %s (%s) ...",
+                    $dry_run ? "[DRY-RUN]" : "",
                     $i, scalar(@url_items), $url,
                     (defined $item->{firefox_container} ? "container=$item->{firefox_container}" : "");
-                IPC::System::Options::system(
-                    {env=>$env, log=>1},
-                    "firefox-container", @ff_args);
+                unless ($dry_run) {
+                    IPC::System::Options::system(
+                        {env=>$env, log=>1},
+                        "firefox-container", @ff_args);
+                }
             }
         } # OPEN_URLS
 
@@ -413,9 +432,12 @@ MARKDOWN
             for my $item (@file_items) {
                 $i++;
                 my $file = $item->{file};
-                log_trace "Opening file [%d/%d] %s ...",
+                log_trace "%sOpening file [%d/%d] %s ...",
+                    $dry_run ? "[DRY-RUN]" : "",
                     $i, scalar(@file_items), $file;
-                Desktop::Open::open_desktop($file);
+                unless ($dry_run) {
+                    Desktop::Open::open_desktop($file);
+                }
             }
         } # OPEN_FILES
 
@@ -430,10 +452,14 @@ MARKDOWN
                 my $dir = $item->{dir};
                 push @dirs, $dir;
             }
-            log_trace "Opening dirs %s ...", \@dirs;
-            IPC::System::Options::system(
-                {log=>1, shell=>1},
-                "dolphin", "--new-window", @dirs, \"&");
+            log_trace "%sOpening dirs %s ...",
+                $dry_run ? "[DRY-RUN]" : "",
+                \@dirs;
+            unless ($dry_run) {
+                IPC::System::Options::system(
+                    {log=>1, shell=>1},
+                    "dolphin", "--new-window", @dirs, \"&");
+            }
         } # OPEN_DIRS
 
       OPEN_PROG: {
@@ -443,12 +469,15 @@ MARKDOWN
             for my $item (@prog_items) {
                 $i++;
                 my $prog = $item->{prog_name} // $item->{prog_path};
-                log_trace "Opening program [%d/%d] %s ...",
+                log_trace "%sOpening program [%d/%d] %s ...",
+                    $dry_run ? "[DRY-RUN]" : "",
                     $i, scalar(@prog_items), $prog;
-            IPC::System::Options::system(
-                {log=>1, shell=>1},
-                $prog, ($item->{prog_args} ? @{ $item->{prog_args} } : ()),
-                \"&");
+                unless ($dry_run) {
+                    IPC::System::Options::system(
+                        {log=>1, shell=>1},
+                        $prog, ($item->{prog_args} ? @{ $item->{prog_args} } : ()),
+                        \"&");
+                }
             }
         } # OPEN_PROGS
 

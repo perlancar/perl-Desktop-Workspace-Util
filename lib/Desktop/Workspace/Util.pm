@@ -549,6 +549,7 @@ MARKDOWN
                         $file,
                         $windowkey;
                     unless ($dry_run) {
+                        require Desktop::Open;
                         Desktop::Open::open_desktop($file);
                     }
                 } # for item
